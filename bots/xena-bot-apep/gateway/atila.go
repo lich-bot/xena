@@ -13,7 +13,7 @@ import (
 	"xena/domains"
 	"xena/helpers"
 	"xena/modules"
-	"xena/networking"
++	"xena/networking"
 
 	"github.com/golang-jwt/jwt"
 )
